@@ -20,7 +20,7 @@ import click
 
 # --- Constants ---
 
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 17173
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_TTL = 3600  # 1 hour
 TOKEN_LENGTH = 4  # bytes, produces 8 hex chars
