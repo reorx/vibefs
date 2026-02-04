@@ -4,11 +4,15 @@ A simple, secure file preview service designed for AI agents to share files
 with users via time-limited URLs.
 """
 
-import hashlib
+import atexit
 import mimetypes
 import os
 import secrets
+import signal
 import sqlite3
+import subprocess
+import sys
+import threading
 import time
 
 import bottle
@@ -20,13 +24,25 @@ DEFAULT_PORT = 8080
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_TTL = 3600  # 1 hour
 TOKEN_LENGTH = 4  # bytes, produces 8 hex chars
-DB_FILENAME = 'vibefs.db'
+CLEANUP_INTERVAL = 60  # seconds between auto-stop checks
+
+# --- State Directory ---
+
+STATE_DIR = os.path.expanduser('~/.vibefs')
+DB_PATH = os.path.join(STATE_DIR, 'vibefs.db')
+PID_PATH = os.path.join(STATE_DIR, 'vibefs.pid')
+LOG_PATH = os.path.join(STATE_DIR, 'vibefs.log')
+
+
+def ensure_state_dir():
+    os.makedirs(STATE_DIR, exist_ok=True)
+
 
 # --- Database ---
 
 
 def get_db_path():
-    return os.environ.get('VIBEFS_DB', DB_FILENAME)
+    return os.environ.get('VIBEFS_DB', DB_PATH)
 
 
 def get_db():
@@ -101,6 +117,114 @@ def lookup_authorization(token):
     return row, 'valid'
 
 
+def has_active_authorizations():
+    """Check if there are any non-expired authorizations."""
+    db = get_db()
+    row = db.execute(
+        'SELECT COUNT(*) as cnt FROM authorizations WHERE expires_at > ?',
+        (time.time(),),
+    ).fetchone()
+    db.close()
+    return row['cnt'] > 0
+
+
+# --- PID File Management ---
+
+
+def read_pid():
+    """Read PID from file. Returns int or None."""
+    if not os.path.exists(PID_PATH):
+        return None
+    with open(PID_PATH) as f:
+        content = f.read().strip()
+    if not content:
+        return None
+    return int(content)
+
+
+def write_pid():
+    """Write current process PID to file."""
+    ensure_state_dir()
+    with open(PID_PATH, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+def remove_pid():
+    """Remove PID file if it exists."""
+    if os.path.exists(PID_PATH):
+        os.remove(PID_PATH)
+
+
+def is_daemon_running():
+    """Check if daemon is alive via PID file. Cleans stale PID files."""
+    pid = read_pid()
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        # Process doesn't exist — stale PID file
+        remove_pid()
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it (different user) — treat as running
+        return True
+
+
+# --- Daemon ---
+
+
+def start_daemon(port, host):
+    """Fork a background daemon process running 'vibefs serve'."""
+    ensure_state_dir()
+    log_file = open(LOG_PATH, 'a')
+    proc = subprocess.Popen(
+        [sys.executable, '-m', 'vibefs', 'serve', '--port', str(port), '--host', host],
+        stdout=log_file,
+        stderr=log_file,
+        start_new_session=True,
+    )
+    log_file.close()
+    # Give it a moment to start and write PID
+    time.sleep(0.3)
+    if proc.poll() is not None:
+        click.echo('Warning: daemon process exited immediately, check ~/.vibefs/vibefs.log', err=True)
+    else:
+        click.echo(f'Daemon started (pid {proc.pid})', err=True)
+
+
+def stop_daemon():
+    """Send SIGTERM to the daemon. Returns True if signal was sent."""
+    pid = read_pid()
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        remove_pid()
+        return False
+
+
+# --- Auto-stop Timer ---
+
+
+def start_cleanup_timer():
+    """Start a background thread that exits the server when all authorizations expire."""
+
+    def check_loop():
+        while True:
+            time.sleep(CLEANUP_INTERVAL)
+            if not has_active_authorizations():
+                click.echo('All authorizations expired, shutting down.', err=True)
+                remove_pid()
+                os._exit(0)
+
+    t = threading.Thread(target=check_loop, daemon=True)
+    t.start()
+
+
 # --- Web Server (Bottle) ---
 
 app = bottle.Bottle()
@@ -161,9 +285,17 @@ def cli():
 @cli.command()
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port to listen on')
 @click.option('--host', default=DEFAULT_HOST, show_default=True, help='Host to bind to')
-def serve(port, host):
+@click.option('--foreground', is_flag=True, default=False, help='Run in foreground (no PID file cleanup timer)')
+def serve(port, host, foreground):
     """Start the web server."""
-    click.echo(f'vibefs serving on http://{host}:{port}')
+    ensure_state_dir()
+    write_pid()
+    atexit.register(remove_pid)
+
+    if not foreground:
+        start_cleanup_timer()
+
+    click.echo(f'vibefs serving on http://{host}:{port} (pid {os.getpid()})')
     app.run(host=host, port=port, quiet=True)
 
 
@@ -173,10 +305,15 @@ def serve(port, host):
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
 @click.option('--host', default='localhost', show_default=True, help='Host for URL generation')
 def allow(path, ttl, port, host):
-    """Authorize a file for access and print its URL."""
+    """Authorize a file for access, auto-start daemon if needed, and print its URL."""
+    ensure_state_dir()
     token, filename = add_authorization(path, ttl)
     url = f'http://{host}:{port}/f/{token}/{filename}'
     click.echo(url)
+
+    # Auto-start daemon if not running
+    if not is_daemon_running():
+        start_daemon(port, DEFAULT_HOST)
 
 
 @cli.command()
@@ -205,6 +342,25 @@ def list_cmd():
         else:
             status = 'expired'
         click.echo(f'  {row["token"]}  {row["filepath"]}  [{status}]')
+
+
+@cli.command()
+def stop():
+    """Stop the running daemon."""
+    if stop_daemon():
+        click.echo('Daemon stopped.')
+    else:
+        click.echo('Daemon is not running.', err=True)
+
+
+@cli.command()
+def status():
+    """Check if the daemon is running."""
+    pid = read_pid()
+    if is_daemon_running():
+        click.echo(f'Daemon is running (pid {pid}).')
+    else:
+        click.echo('Daemon is not running.')
 
 
 if __name__ == '__main__':
