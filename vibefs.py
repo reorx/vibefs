@@ -243,6 +243,82 @@ def start_cleanup_timer():
     t.start()
 
 
+# --- Renderers ---
+
+
+class BaseRenderer:
+    """Default renderer: returns raw file content with guessed content-type."""
+
+    def render(self, filepath):
+        content_type, _ = mimetypes.guess_type(filepath)
+        if content_type is None:
+            content_type = 'application/octet-stream'
+        bottle.response.content_type = content_type
+        with open(filepath, 'rb') as f:
+            return f.read()
+
+
+class CodeRenderer:
+    """Renders code files with syntax highlighting via Pygments."""
+
+    def render(self, filepath):
+        from pygments import highlight
+        from pygments.formatters import HtmlFormatter
+        from pygments.lexers import get_lexer_for_filename, TextLexer
+
+        with open(filepath) as f:
+            code = f.read()
+
+        try:
+            lexer = get_lexer_for_filename(filepath)
+        except Exception:
+            lexer = TextLexer()
+
+        formatter = HtmlFormatter(
+            full=True,
+            style='monokai',
+            linenos=True,
+            title=os.path.basename(filepath),
+        )
+        bottle.response.content_type = 'text/html; charset=utf-8'
+        return highlight(code, lexer, formatter)
+
+
+# Renderer registry: extension -> renderer instance
+_renderers = {}
+_fallback_renderer = BaseRenderer()
+
+CODE_EXTENSIONS = [
+    '.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.java',
+    '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.kt', '.scala',
+    '.sh', '.bash', '.zsh', '.fish',
+    '.html', '.css', '.scss', '.less',
+    '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+    '.xml', '.sql', '.graphql',
+    '.md', '.rst', '.txt',
+    '.lua', '.vim', '.el', '.clj', '.hs', '.ml', '.ex', '.exs',
+    '.r', '.R', '.jl', '.pl', '.pm', '.php',
+    '.dockerfile', '.makefile', '.cmake',
+    '.conf', '.env', '.gitignore',
+]
+
+
+def init_renderers():
+    """Register renderers for known extensions."""
+    code_renderer = CodeRenderer()
+    for ext in CODE_EXTENSIONS:
+        _renderers[ext] = code_renderer
+
+
+def get_renderer(filepath):
+    """Get the appropriate renderer for a file, falling back to BaseRenderer."""
+    _, ext = os.path.splitext(filepath)
+    return _renderers.get(ext.lower(), _fallback_renderer)
+
+
+init_renderers()
+
+
 # --- Web Server (Bottle) ---
 
 app = bottle.Bottle()
@@ -262,13 +338,8 @@ def serve_file(token, filename):
     if not os.path.isfile(filepath):
         bottle.abort(404, 'File no longer exists on disk')
 
-    content_type, _ = mimetypes.guess_type(filepath)
-    if content_type is None:
-        content_type = 'application/octet-stream'
-
-    bottle.response.content_type = content_type
-    with open(filepath, 'rb') as f:
-        return f.read()
+    renderer = get_renderer(filepath)
+    return renderer.render(filepath)
 
 
 EXPIRED_TEMPLATE = """<!DOCTYPE html>

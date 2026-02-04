@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "bottle>=0.13.4",
     "click>=8.3.1",
+    "pygments>=2.19.2",
 ]
 
 [project.scripts]
