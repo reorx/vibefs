@@ -326,9 +326,9 @@ def allow(path, ttl, port, host):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
     token, filename = add_authorization(path, ttl)
-    domain = load_config().get('domain')
-    if domain:
-        url = f'http://{domain}/f/{token}/{filename}'
+    base_url = load_config().get('base_url')
+    if base_url:
+        url = f'{base_url.rstrip("/")}/f/{token}/{filename}'
     else:
         url = f'http://{host}:{port}/f/{token}/{filename}'
     click.echo(url)
@@ -391,14 +391,14 @@ def config():
     pass
 
 
-VALID_CONFIG_KEYS = ['domain']
+VALID_CONFIG_KEYS = ['base_url']
 
 
 @config.command('set')
 @click.argument('key')
 @click.argument('value')
 def config_set(key, value):
-    """Set a config value (e.g. vibefs config set domain files.example.com)."""
+    """Set a config value (e.g. vibefs config set base_url https://files.example.com)."""
     if key not in VALID_CONFIG_KEYS:
         click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
         sys.exit(1)
@@ -411,7 +411,7 @@ def config_set(key, value):
 @config.command('get')
 @click.argument('key')
 def config_get(key):
-    """Get a config value (e.g. vibefs config get domain)."""
+    """Get a config value (e.g. vibefs config get base_url)."""
     if key not in VALID_CONFIG_KEYS:
         click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
         sys.exit(1)
