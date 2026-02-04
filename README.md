@@ -4,9 +4,9 @@ A file preview server with time-limited access control, designed for AI agents t
 
 Files are not accessible by default. Each file must be explicitly authorized with a TTL (default: 1 hour). The server starts automatically on the first `allow` call and shuts down when all authorizations expire.
 
-| File preview | Agent interaction |
+| Agent interaction | File preview |
 |:---:|:---:|
-| <img src="screenshots/preview.jpg" width="300"> | <img src="screenshots/chat.jpg" width="300"> |
+| <img src="screenshots/chat.jpg" width="300"> | <img src="screenshots/preview.jpg" width="300"> |
 
 ## Install
 
