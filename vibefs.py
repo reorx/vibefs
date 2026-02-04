@@ -324,9 +324,6 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     font-size: 14px;
     font-weight: 600;
     color: #e0e0e0;
-    position: sticky;
-    top: 0;
-    z-index: 10;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -349,7 +346,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     padding: 12px 8px;
     margin: 0;
     font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.6;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -362,7 +359,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
       font-size: 13px;
     }}
     .highlight pre {{
-      font-size: 13px;
+      font-size: 14px;
       line-height: 1.5;
       padding: 8px 12px;
     }}
