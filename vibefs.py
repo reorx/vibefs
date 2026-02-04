@@ -275,13 +275,117 @@ class CodeRenderer:
             lexer = TextLexer()
 
         formatter = HtmlFormatter(
-            full=True,
             style='monokai',
             linenos=True,
-            title=os.path.basename(filepath),
+            cssclass='highlight',
         )
+        highlighted = highlight(code, lexer, formatter)
+        css = formatter.get_style_defs('.highlight')
+        filename = os.path.basename(filepath)
+
         bottle.response.content_type = 'text/html; charset=utf-8'
-        return highlight(code, lexer, formatter)
+        return CODE_HTML_TEMPLATE.format(
+            filename=filename,
+            pygments_css=css,
+            highlighted=highlighted,
+        )
+
+
+CODE_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{filename}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    min-height: 100vh;
+  }}
+  .file-header {{
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #e0e0e0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }}
+  .file-content {{
+    overflow-x: auto;
+  }}
+  /* Pygments overrides */
+  {pygments_css}
+  .highlight {{
+    background: #1e1e1e;
+    padding: 0;
+  }}
+  .highlight pre {{
+    padding: 12px 8px;
+    margin: 0;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }}
+  .highlight .linenodiv {{
+    padding: 12px 0;
+  }}
+  .highlight .linenodiv pre {{
+    color: #555;
+    font-size: 12px;
+    text-align: right;
+    padding-right: 12px;
+    border-right: 1px solid #333;
+    user-select: none;
+  }}
+  /* Table layout for line numbers */
+  .highlight table {{
+    border-collapse: collapse;
+    width: 100%;
+  }}
+  .highlight td {{
+    vertical-align: top;
+  }}
+  .highlight td.linenos {{
+    width: 1px;
+    white-space: nowrap;
+  }}
+  .highlight td.code {{
+    width: 100%;
+  }}
+  /* Mobile responsive */
+  @media (max-width: 768px) {{
+    .file-header {{
+      padding: 10px 12px;
+      font-size: 13px;
+    }}
+    .highlight pre {{
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 8px 6px;
+    }}
+    .highlight .linenodiv pre {{
+      font-size: 11px;
+      padding-right: 8px;
+    }}
+  }}
+</style>
+</head>
+<body>
+  <div class="file-header">{filename}</div>
+  <div class="file-content">
+    {highlighted}
+  </div>
+</body>
+</html>"""
 
 
 # Renderer registry: extension -> renderer instance
