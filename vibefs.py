@@ -281,18 +281,26 @@ class CodeRenderer:
         )
         highlighted = highlight(code, lexer, formatter)
         css = formatter.get_style_defs('.highlight')
-        filename = os.path.basename(filepath)
+        display_path = _display_path(filepath)
         stat = os.stat(filepath)
         file_size = _format_size(stat.st_size)
         file_mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
+        file_ctime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_birthtime if hasattr(stat, 'st_birthtime') else stat.st_ctime))
 
         bottle.response.content_type = 'text/html; charset=utf-8'
         return CODE_HTML_TEMPLATE.format(
-            filename=filename,
-            file_info=f'{file_size} · {file_mtime}',
+            display_path=display_path,
+            file_meta=f'{file_size} · MTime {file_mtime} · CTime {file_ctime}',
             pygments_css=css,
             highlighted=highlighted,
         )
+
+
+def _display_path(filepath):
+    home = os.path.expanduser('~')
+    if filepath.startswith(home + '/'):
+        return '~/' + filepath[len(home) + 1:]
+    return filepath
 
 
 def _format_size(nbytes):
@@ -308,7 +316,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{filename}</title>
+<title>{display_path}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{
@@ -321,17 +329,18 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     background: #2d2d2d;
     border-bottom: 1px solid #404040;
     padding: 12px 16px;
+  }}
+  .file-path {{
     font-size: 14px;
     font-weight: 600;
     color: #e0e0e0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    word-break: break-all;
   }}
-  .file-info {{
+  .file-meta {{
     font-size: 12px;
     font-weight: 400;
     color: #888;
+    margin-top: 4px;
   }}
   .file-content {{
     overflow-x: auto;
@@ -367,7 +376,10 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <div class="file-header"><span>{filename}</span><span class="file-info">{file_info}</span></div>
+  <div class="file-header">
+    <div class="file-path">{display_path}</div>
+    <div class="file-meta">{file_meta}</div>
+  </div>
   <div class="file-content">
     {highlighted}
   </div>
