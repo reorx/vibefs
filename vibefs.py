@@ -290,7 +290,7 @@ class CodeRenderer:
         bottle.response.content_type = 'text/html; charset=utf-8'
         return CODE_HTML_TEMPLATE.format(
             display_path=display_path,
-            file_meta=f'{file_size} · MTime {file_mtime} · CTime {file_ctime}',
+            file_meta=f'{file_size} · {file_mtime} (mtime) · {file_ctime} (ctime)',
             pygments_css=css,
             highlighted=highlighted,
         )
