@@ -5,6 +5,7 @@ with users via time-limited URLs.
 """
 
 import atexit
+import json
 import mimetypes
 import os
 import secrets
@@ -32,10 +33,27 @@ STATE_DIR = os.path.expanduser('~/.vibefs')
 DB_PATH = os.path.join(STATE_DIR, 'vibefs.db')
 PID_PATH = os.path.join(STATE_DIR, 'vibefs.pid')
 LOG_PATH = os.path.join(STATE_DIR, 'vibefs.log')
+CONFIG_PATH = os.path.join(STATE_DIR, 'config.json')
 
 
 def ensure_state_dir():
     os.makedirs(STATE_DIR, exist_ok=True)
+
+
+# --- Config ---
+
+def load_config():
+    if os.path.isfile(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_config(cfg):
+    ensure_state_dir()
+    with open(CONFIG_PATH, 'w') as f:
+        json.dump(cfg, f, indent=2)
+        f.write('\n')
 
 
 # --- Database ---
@@ -309,6 +327,8 @@ def allow(path, ttl, port, host, domain):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
     token, filename = add_authorization(path, ttl)
+    if not domain:
+        domain = load_config().get('domain')
     if domain:
         url = f'http://{domain}/f/{token}/{filename}'
     else:
@@ -365,6 +385,44 @@ def status():
         click.echo(f'Daemon is running (pid {pid}).')
     else:
         click.echo('Daemon is not running.')
+
+
+@cli.group()
+def config():
+    """Get or set configuration values."""
+    pass
+
+
+VALID_CONFIG_KEYS = ['domain']
+
+
+@config.command('set')
+@click.argument('key')
+@click.argument('value')
+def config_set(key, value):
+    """Set a config value (e.g. vibefs config set domain files.example.com)."""
+    if key not in VALID_CONFIG_KEYS:
+        click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
+        sys.exit(1)
+    cfg = load_config()
+    cfg[key] = value
+    save_config(cfg)
+    click.echo(f'{key} = {value}')
+
+
+@config.command('get')
+@click.argument('key')
+def config_get(key):
+    """Get a config value (e.g. vibefs config get domain)."""
+    if key not in VALID_CONFIG_KEYS:
+        click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
+        sys.exit(1)
+    cfg = load_config()
+    value = cfg.get(key)
+    if value is None:
+        click.echo(f'{key}: (not set)')
+    else:
+        click.echo(f'{key} = {value}')
 
 
 if __name__ == '__main__':
