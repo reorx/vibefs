@@ -276,7 +276,7 @@ class CodeRenderer:
 
         formatter = HtmlFormatter(
             style='monokai',
-            linenos=True,
+            linenos=False,
             cssclass='highlight',
         )
         highlighted = highlight(code, lexer, formatter)
@@ -335,32 +335,6 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     word-wrap: break-word;
     overflow-wrap: break-word;
   }}
-  .highlight .linenodiv {{
-    padding: 12px 0;
-  }}
-  .highlight .linenodiv pre {{
-    color: #555;
-    font-size: 12px;
-    text-align: right;
-    padding-right: 12px;
-    border-right: 1px solid #333;
-    user-select: none;
-  }}
-  /* Table layout for line numbers */
-  .highlight table {{
-    border-collapse: collapse;
-    width: 100%;
-  }}
-  .highlight td {{
-    vertical-align: top;
-  }}
-  .highlight td.linenos {{
-    width: 1px;
-    white-space: nowrap;
-  }}
-  .highlight td.code {{
-    width: 100%;
-  }}
   /* Mobile responsive */
   @media (max-width: 768px) {{
     .file-header {{
@@ -370,11 +344,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     .highlight pre {{
       font-size: 12px;
       line-height: 1.5;
-      padding: 8px 6px;
-    }}
-    .highlight .linenodiv pre {{
-      font-size: 11px;
-      padding-right: 8px;
+      padding: 8px 12px;
     }}
   }}
 </style>
