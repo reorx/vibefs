@@ -24,7 +24,9 @@ uvx vibefs --help
 vibefs allow /path/to/file.py
 # http://localhost:17173/f/a3b7c2d1/file.py
 
-vibefs allow /path/to/file.py --ttl 300  # 5 minutes
+vibefs allow /path/to/file.py --ttl 300   # 5 minutes
+vibefs allow /path/to/file.py --head 50   # Only first 50 lines
+vibefs allow /path/to/file.py --tail 20   # Only last 20 lines
 ```
 
 The daemon starts automatically if it's not already running.

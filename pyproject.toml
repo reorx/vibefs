@@ -1,6 +1,6 @@
 [project]
 name = "vibefs"
-version = "0.1.0"
+version = "0.2.0"
 description = "A simple, secure file preview service with time-limited URLs"
 readme = "README.md"
 license = "MIT"
