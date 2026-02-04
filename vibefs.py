@@ -282,13 +282,25 @@ class CodeRenderer:
         highlighted = highlight(code, lexer, formatter)
         css = formatter.get_style_defs('.highlight')
         filename = os.path.basename(filepath)
+        stat = os.stat(filepath)
+        file_size = _format_size(stat.st_size)
+        file_mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
 
         bottle.response.content_type = 'text/html; charset=utf-8'
         return CODE_HTML_TEMPLATE.format(
             filename=filename,
+            file_info=f'{file_size} · {file_mtime}',
             pygments_css=css,
             highlighted=highlighted,
         )
+
+
+def _format_size(nbytes):
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if nbytes < 1024:
+            return f'{nbytes:.0f} {unit}' if unit == 'B' else f'{nbytes:.1f} {unit}'
+        nbytes /= 1024
+    return f'{nbytes:.1f} TB'
 
 
 CODE_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -315,6 +327,14 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     position: sticky;
     top: 0;
     z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }}
+  .file-info {{
+    font-size: 12px;
+    font-weight: 400;
+    color: #888;
   }}
   .file-content {{
     overflow-x: auto;
@@ -329,7 +349,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
     padding: 12px 8px;
     margin: 0;
     font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.6;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -342,7 +362,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
       font-size: 13px;
     }}
     .highlight pre {{
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.5;
       padding: 8px 12px;
     }}
@@ -350,7 +370,7 @@ CODE_HTML_TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <div class="file-header">{filename}</div>
+  <div class="file-header"><span>{filename}</span><span class="file-info">{file_info}</span></div>
   <div class="file-content">
     {highlighted}
   </div>
