@@ -322,13 +322,11 @@ def serve(port, host, foreground):
 @click.option('--ttl', default=DEFAULT_TTL, show_default=True, help='Time-to-live in seconds')
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
 @click.option('--host', default='localhost', show_default=True, help='Host for URL generation')
-@click.option('--domain', default=None, envvar='VIBEFS_DOMAIN', help='Domain for URL generation (overrides host:port, e.g. files.example.com)')
-def allow(path, ttl, port, host, domain):
+def allow(path, ttl, port, host):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
     token, filename = add_authorization(path, ttl)
-    if not domain:
-        domain = load_config().get('domain')
+    domain = load_config().get('domain')
     if domain:
         url = f'http://{domain}/f/{token}/{filename}'
     else:
