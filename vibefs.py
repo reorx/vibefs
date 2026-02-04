@@ -249,11 +249,19 @@ def start_cleanup_timer():
 class BaseRenderer:
     """Default renderer: returns raw file content with guessed content-type."""
 
-    def render(self, filepath):
+    def render(self, filepath, head=None, tail=None):
         content_type, _ = mimetypes.guess_type(filepath)
         if content_type is None:
             content_type = 'application/octet-stream'
         bottle.response.content_type = content_type
+        if head is not None or tail is not None:
+            with open(filepath) as f:
+                lines = f.readlines()
+            if head is not None:
+                lines = lines[:head]
+            elif tail is not None:
+                lines = lines[-tail:]
+            return ''.join(lines)
         with open(filepath, 'rb') as f:
             return f.read()
 
@@ -261,13 +269,19 @@ class BaseRenderer:
 class CodeRenderer:
     """Renders code files with syntax highlighting via Pygments."""
 
-    def render(self, filepath):
+    def render(self, filepath, head=None, tail=None):
         from pygments import highlight
         from pygments.formatters import HtmlFormatter
         from pygments.lexers import get_lexer_for_filename, TextLexer
 
         with open(filepath) as f:
-            code = f.read()
+            lines = f.readlines()
+
+        if head is not None:
+            lines = lines[:head]
+        elif tail is not None:
+            lines = lines[-tail:]
+        code = ''.join(lines)
 
         try:
             lexer = get_lexer_for_filename(filepath)
@@ -441,8 +455,13 @@ def serve_file(token, filename):
     if not os.path.isfile(filepath):
         bottle.abort(404, 'File no longer exists on disk')
 
+    head = bottle.request.query.get('head')
+    tail = bottle.request.query.get('tail')
+    head = int(head) if head else None
+    tail = int(tail) if tail else None
+
     renderer = get_renderer(filepath)
-    return renderer.render(filepath)
+    return renderer.render(filepath, head=head, tail=tail)
 
 
 EXPIRED_TEMPLATE = """<!DOCTYPE html>
@@ -496,7 +515,9 @@ def serve(port, host, foreground):
 @click.option('--ttl', default=DEFAULT_TTL, show_default=True, help='Time-to-live in seconds')
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
 @click.option('--host', default='localhost', show_default=True, help='Host for URL generation')
-def allow(path, ttl, port, host):
+@click.option('--head', default=None, type=int, help='Only show first N lines')
+@click.option('--tail', default=None, type=int, help='Only show last N lines')
+def allow(path, ttl, port, host, head, tail):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
     token, filename = add_authorization(path, ttl)
@@ -505,6 +526,13 @@ def allow(path, ttl, port, host):
         url = f'{base_url.rstrip("/")}/f/{token}/{filename}'
     else:
         url = f'http://{host}:{port}/f/{token}/{filename}'
+    params = []
+    if head is not None:
+        params.append(f'head={head}')
+    if tail is not None:
+        params.append(f'tail={tail}')
+    if params:
+        url += '?' + '&'.join(params)
     click.echo(url)
 
     # Auto-start daemon if not running
