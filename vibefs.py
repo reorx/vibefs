@@ -306,9 +306,14 @@ class CodeRenderer:
         except Exception:
             lexer = TextLexer()
 
+        cfg = load_config()
+        pygments_cfg = cfg.get('pygments', {})
+        style = pygments_cfg.get('style', 'monokai')
+        linenos = pygments_cfg.get('linenos', False)
+
         formatter = HtmlFormatter(
-            style='monokai',
-            linenos=False,
+            style=style,
+            linenos=linenos,
             cssclass='highlight',
         )
         highlighted = highlight(code, lexer, formatter)
@@ -613,32 +618,59 @@ def config():
     pass
 
 
-VALID_CONFIG_KEYS = ['base_url']
+VALID_CONFIG_KEYS = ['base_url', 'pygments.style', 'pygments.linenos']
+
+
+def _get_nested(cfg, key):
+    """Get a value from config, supporting dot notation (e.g. pygments.style)."""
+    parts = key.split('.')
+    value = cfg
+    for part in parts:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+        if value is None:
+            return None
+    return value
+
+
+def _set_nested(cfg, key, value):
+    """Set a value in config, supporting dot notation (e.g. pygments.style)."""
+    parts = key.split('.')
+    target = cfg
+    for part in parts[:-1]:
+        if part not in target or not isinstance(target[part], dict):
+            target[part] = {}
+        target = target[part]
+    # Handle boolean conversion for linenos
+    if key == 'pygments.linenos':
+        value = value.lower() in ('true', '1', 'yes', 'table', 'inline')
+    target[parts[-1]] = value
 
 
 @config.command('set')
 @click.argument('key')
 @click.argument('value')
 def config_set(key, value):
-    """Set a config value (e.g. vibefs config set base_url https://files.example.com)."""
+    """Set a config value (e.g. vibefs config set pygments.style dracula)."""
     if key not in VALID_CONFIG_KEYS:
         click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
         sys.exit(1)
     cfg = load_config()
-    cfg[key] = value
+    _set_nested(cfg, key, value)
     save_config(cfg)
-    click.echo(f'{key} = {value}')
+    click.echo(f'{key} = {_get_nested(cfg, key)}')
 
 
 @config.command('get')
 @click.argument('key')
 def config_get(key):
-    """Get a config value (e.g. vibefs config get base_url)."""
+    """Get a config value (e.g. vibefs config get pygments.style)."""
     if key not in VALID_CONFIG_KEYS:
         click.echo(f'Unknown config key: {key}. Valid keys: {", ".join(VALID_CONFIG_KEYS)}', err=True)
         sys.exit(1)
     cfg = load_config()
-    value = cfg.get(key)
+    value = _get_nested(cfg, key)
     if value is None:
         click.echo(f'{key}: (not set)')
     else:
