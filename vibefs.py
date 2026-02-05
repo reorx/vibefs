@@ -309,7 +309,7 @@ class CodeRenderer:
         cfg = load_config()
         pygments_cfg = cfg.get('pygments', {})
         style = pygments_cfg.get('style', 'monokai')
-        linenos = pygments_cfg.get('linenos', False)
+        linenos = 'inline' if pygments_cfg.get('linenos', False) else False
 
         formatter = HtmlFormatter(
             style=style,
