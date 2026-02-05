@@ -55,7 +55,13 @@ vibefs serve                # Start server in foreground (for debugging)
 ```bash
 vibefs config set base_url https://files.example.com
 vibefs config get base_url
+
+# Pygments syntax highlighting options
+vibefs config set pygments.style dracula    # Theme (default: monokai)
+vibefs config set pygments.linenos true     # Show line numbers (default: false)
 ```
+
+Available styles: `monokai`, `dracula`, `github-dark`, `one-dark`, `nord`, `solarized-dark`, `gruvbox-dark`, and [many more](https://pygments.org/styles/).
 
 When `base_url` is set, the `allow` command outputs URLs using it instead of `localhost:port`:
 
