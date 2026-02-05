@@ -80,23 +80,41 @@ def get_db():
 
 
 def add_authorization(filepath, ttl):
-    """Add an authorization record and return (token, filename)."""
+    """Add an authorization record and return (token, filename, is_new)."""
     abs_path = os.path.abspath(filepath)
     if not os.path.isfile(abs_path):
         raise FileNotFoundError(f'File not found: {abs_path}')
 
-    token = secrets.token_hex(TOKEN_LENGTH)
     filename = os.path.basename(abs_path)
     now = time.time()
 
     db = get_db()
-    db.execute(
-        'INSERT INTO authorizations (token, filepath, filename, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-        (token, abs_path, filename, now, now + ttl),
-    )
-    db.commit()
-    db.close()
-    return token, filename
+    # Check for existing non-expired authorization
+    row = db.execute(
+        'SELECT token FROM authorizations WHERE filepath = ? AND expires_at > ?',
+        (abs_path, now),
+    ).fetchone()
+
+    if row:
+        # Update expiration time
+        token = row['token']
+        db.execute(
+            'UPDATE authorizations SET expires_at = ? WHERE token = ?',
+            (now + ttl, token),
+        )
+        db.commit()
+        db.close()
+        return token, filename, False
+    else:
+        # Create new record
+        token = secrets.token_hex(TOKEN_LENGTH)
+        db.execute(
+            'INSERT INTO authorizations (token, filepath, filename, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+            (token, abs_path, filename, now, now + ttl),
+        )
+        db.commit()
+        db.close()
+        return token, filename, True
 
 
 def remove_authorization(token):
@@ -520,7 +538,7 @@ def serve(port, host, foreground):
 def allow(path, ttl, port, host, head, tail):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
-    token, filename = add_authorization(path, ttl)
+    token, filename, is_new = add_authorization(path, ttl)
     base_url = load_config().get('base_url')
     if base_url:
         url = f'{base_url.rstrip("/")}/f/{token}/{filename}'
@@ -534,6 +552,8 @@ def allow(path, ttl, port, host, head, tail):
     if params:
         url += '?' + '&'.join(params)
     click.echo(url)
+    if not is_new:
+        click.echo('(existing authorization extended)', err=True)
 
     # Auto-start daemon if not running
     if not is_daemon_running():
