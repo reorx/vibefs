@@ -535,7 +535,7 @@ def serve(port, host, foreground):
 
 @cli.command()
 @click.argument('path')
-@click.option('--ttl', default=DEFAULT_TTL, show_default=True, help='Time-to-live in seconds')
+@click.option('--ttl', default=None, type=int, help=f'Time-to-live in seconds (default: config file_ttl or {DEFAULT_TTL})')
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
 @click.option('--host', default='localhost', show_default=True, help='Host for URL generation')
 @click.option('--head', default=None, type=int, help='Only show first N lines')
@@ -543,6 +543,9 @@ def serve(port, host, foreground):
 def allow(path, ttl, port, host, head, tail):
     """Authorize a file for access, auto-start daemon if needed, and print its URL."""
     ensure_state_dir()
+    if ttl is None:
+        cfg = load_config()
+        ttl = cfg.get('file_ttl', DEFAULT_TTL)
     token, filename, is_new = add_authorization(path, ttl)
     base_url = load_config().get('base_url')
     if base_url:
@@ -618,7 +621,7 @@ def config():
     pass
 
 
-VALID_CONFIG_KEYS = ['base_url', 'pygments.style', 'pygments.linenos']
+VALID_CONFIG_KEYS = ['base_url', 'file_ttl', 'pygments.style', 'pygments.linenos']
 
 
 def _get_nested(cfg, key):
@@ -642,9 +645,11 @@ def _set_nested(cfg, key, value):
         if part not in target or not isinstance(target[part], dict):
             target[part] = {}
         target = target[part]
-    # Handle boolean conversion for linenos
+    # Handle type conversions
     if key == 'pygments.linenos':
         value = value.lower() in ('true', '1', 'yes', 'table', 'inline')
+    elif key == 'file_ttl':
+        value = int(value)
     target[parts[-1]] = value
 
 
