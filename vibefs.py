@@ -440,6 +440,7 @@ CODE_EXTENSIONS = [
     '.r', '.R', '.jl', '.pl', '.pm', '.php',
     '.dockerfile', '.makefile', '.cmake',
     '.conf', '.env', '.gitignore',
+    '.diff', '.patch',
 ]
 
 
