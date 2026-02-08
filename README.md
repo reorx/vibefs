@@ -35,6 +35,18 @@ vibefs allow /path/to/file.py --tail 20   # Only last 20 lines
 
 The daemon starts automatically if it's not already running.
 
+### Authorize a git commit
+
+```bash
+vibefs allow-git /path/to/repo abc1234
+# https://files.example.com/git/a3b7c2d1
+
+vibefs allow-git . HEAD          # Current commit in current repo
+vibefs allow-git . HEAD --ttl 300
+```
+
+The commit is displayed as a web page with metadata, file list, and expandable diffs with syntax highlighting.
+
 ### Manage authorizations
 
 ```bash
@@ -56,6 +68,9 @@ vibefs serve                # Start server in foreground (for debugging)
 vibefs config set base_url https://files.example.com
 vibefs config get base_url
 
+# Default TTL for allow/allow-git (in seconds, default: 3600)
+vibefs config set file_ttl 43200            # 12 hours
+
 # Pygments syntax highlighting options
 vibefs config set pygments.style dracula    # Theme (default: monokai)
 vibefs config set pygments.linenos true     # Show line numbers (default: false)
@@ -73,6 +88,7 @@ vibefs allow /path/to/file.py
 ## File rendering
 
 - Code and text files (`.py`, `.js`, `.md`, `.json`, etc.) are rendered with syntax highlighting via Pygments.
+- Git commits are rendered with metadata, file list, and expandable diffs highlighted with Pygments.
 - Other files are served with their original content type.
 
 ## Deploy
