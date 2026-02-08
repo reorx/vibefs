@@ -42,6 +42,7 @@ def ensure_state_dir():
 
 # --- Config ---
 
+
 def load_config():
     if os.path.isfile(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
@@ -71,6 +72,15 @@ def get_db():
             token TEXT PRIMARY KEY,
             filepath TEXT NOT NULL,
             filename TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS git_authorizations (
+            token TEXT PRIMARY KEY,
+            repo_path TEXT NOT NULL,
+            commit_hash TEXT NOT NULL,
             created_at REAL NOT NULL,
             expires_at REAL NOT NULL
         )
@@ -154,14 +164,144 @@ def lookup_authorization(token):
 
 
 def has_active_authorizations():
-    """Check if there are any non-expired authorizations."""
+    """Check if there are any non-expired authorizations (files or git)."""
+    db = get_db()
+    now = time.time()
+    file_cnt = db.execute(
+        'SELECT COUNT(*) as cnt FROM authorizations WHERE expires_at > ?',
+        (now,),
+    ).fetchone()['cnt']
+    git_cnt = db.execute(
+        'SELECT COUNT(*) as cnt FROM git_authorizations WHERE expires_at > ?',
+        (now,),
+    ).fetchone()['cnt']
+    db.close()
+    return (file_cnt + git_cnt) > 0
+
+
+# --- Git Authorization ---
+
+
+def add_git_authorization(repo_path, commit_hash, ttl):
+    """Add a git commit authorization record and return (token, is_new)."""
+    abs_repo = os.path.abspath(repo_path)
+    if not os.path.isdir(os.path.join(abs_repo, '.git')):
+        raise ValueError(f'Not a git repository: {abs_repo}')
+
+    now = time.time()
+    db = get_db()
+    # Check for existing non-expired authorization for same repo+commit
+    row = db.execute(
+        'SELECT token FROM git_authorizations WHERE repo_path = ? AND commit_hash = ? AND expires_at > ?',
+        (abs_repo, commit_hash, now),
+    ).fetchone()
+
+    if row:
+        token = row['token']
+        db.execute(
+            'UPDATE git_authorizations SET expires_at = ? WHERE token = ?',
+            (now + ttl, token),
+        )
+        db.commit()
+        db.close()
+        return token, False
+    else:
+        token = secrets.token_hex(TOKEN_LENGTH)
+        db.execute(
+            'INSERT INTO git_authorizations (token, repo_path, commit_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+            (token, abs_repo, commit_hash, now, now + ttl),
+        )
+        db.commit()
+        db.close()
+        return token, True
+
+
+def lookup_git_authorization(token):
+    """Look up a git token. Returns (row, status)."""
     db = get_db()
     row = db.execute(
-        'SELECT COUNT(*) as cnt FROM authorizations WHERE expires_at > ?',
-        (time.time(),),
+        'SELECT token, repo_path, commit_hash, created_at, expires_at FROM git_authorizations WHERE token = ?',
+        (token,),
     ).fetchone()
     db.close()
-    return row['cnt'] > 0
+
+    if row is None:
+        return None, 'not_found'
+    if time.time() > row['expires_at']:
+        return row, 'expired'
+    return row, 'valid'
+
+
+def get_git_commit_info(repo_path, commit_hash):
+    """Get commit info via git commands. Returns dict with metadata and file diffs."""
+    # Get commit metadata
+    result = subprocess.run(
+        ['git', 'log', '-1', '--format=%H%n%an%n%ae%n%aI%n%s%n%b', commit_hash],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.strip().split('\n', 5)
+    info = {
+        'hash': lines[0] if len(lines) > 0 else commit_hash,
+        'author_name': lines[1] if len(lines) > 1 else '',
+        'author_email': lines[2] if len(lines) > 2 else '',
+        'date': lines[3] if len(lines) > 3 else '',
+        'subject': lines[4] if len(lines) > 4 else '',
+        'body': lines[5].strip() if len(lines) > 5 else '',
+    }
+
+    # Get list of changed files with stats
+    result = subprocess.run(
+        ['git', 'diff-tree', '--no-commit-id', '-r', '--numstat', commit_hash],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    files = []
+    for line in result.stdout.strip().split('\n'):
+        if not line:
+            continue
+        parts = line.split('\t', 2)
+        if len(parts) == 3:
+            added, deleted, filepath = parts
+            files.append(
+                {
+                    'path': filepath,
+                    'added': added,
+                    'deleted': deleted,
+                }
+            )
+
+    # Get diff for each file
+    for f in files:
+        try:
+            result = subprocess.run(
+                ['git', 'diff', f'{commit_hash}~1', commit_hash, '--', f['path']],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            f['diff'] = result.stdout
+        except subprocess.CalledProcessError:
+            # Initial commit or other edge case
+            try:
+                result = subprocess.run(
+                    ['git', 'show', f'{commit_hash}', '--', f['path']],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                f['diff'] = result.stdout
+            except subprocess.CalledProcessError:
+                f['diff'] = ''
+
+    info['files'] = files
+    return info
 
 
 # --- PID File Management ---
@@ -322,7 +462,9 @@ class CodeRenderer:
         stat = os.stat(filepath)
         file_size = _format_size(stat.st_size)
         file_mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
-        file_ctime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_birthtime if hasattr(stat, 'st_birthtime') else stat.st_ctime))
+        file_ctime = time.strftime(
+            '%Y-%m-%d %H:%M', time.localtime(stat.st_birthtime if hasattr(stat, 'st_birthtime') else stat.st_ctime)
+        )
 
         bottle.response.content_type = 'text/html; charset=utf-8'
         return CODE_HTML_TEMPLATE.format(
@@ -336,7 +478,7 @@ class CodeRenderer:
 def _display_path(filepath):
     home = os.path.expanduser('~')
     if filepath.startswith(home + '/'):
-        return '~/' + filepath[len(home) + 1:]
+        return '~/' + filepath[len(home) + 1 :]
     return filepath
 
 
@@ -429,18 +571,65 @@ _renderers = {}
 _fallback_renderer = BaseRenderer()
 
 CODE_EXTENSIONS = [
-    '.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.java',
-    '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.kt', '.scala',
-    '.sh', '.bash', '.zsh', '.fish',
-    '.html', '.css', '.scss', '.less',
-    '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
-    '.xml', '.sql', '.graphql',
-    '.md', '.rst', '.txt',
-    '.lua', '.vim', '.el', '.clj', '.hs', '.ml', '.ex', '.exs',
-    '.r', '.R', '.jl', '.pl', '.pm', '.php',
-    '.dockerfile', '.makefile', '.cmake',
-    '.conf', '.env', '.gitignore',
-    '.diff', '.patch',
+    '.py',
+    '.js',
+    '.ts',
+    '.jsx',
+    '.tsx',
+    '.go',
+    '.rs',
+    '.rb',
+    '.java',
+    '.c',
+    '.cpp',
+    '.h',
+    '.hpp',
+    '.cs',
+    '.swift',
+    '.kt',
+    '.scala',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.fish',
+    '.html',
+    '.css',
+    '.scss',
+    '.less',
+    '.json',
+    '.yaml',
+    '.yml',
+    '.toml',
+    '.ini',
+    '.cfg',
+    '.xml',
+    '.sql',
+    '.graphql',
+    '.md',
+    '.rst',
+    '.txt',
+    '.lua',
+    '.vim',
+    '.el',
+    '.clj',
+    '.hs',
+    '.ml',
+    '.ex',
+    '.exs',
+    '.r',
+    '.R',
+    '.jl',
+    '.pl',
+    '.pm',
+    '.php',
+    '.dockerfile',
+    '.makefile',
+    '.cmake',
+    '.conf',
+    '.env',
+    '.gitignore',
+    '.diff',
+    '.patch',
 ]
 
 
@@ -486,6 +675,186 @@ def serve_file(token, filename):
 
     renderer = get_renderer(filepath)
     return renderer.render(filepath, head=head, tail=tail)
+
+
+@app.route('/git/<token>')
+def serve_git(token):
+    row, status = lookup_git_authorization(token)
+
+    if status == 'not_found':
+        bottle.abort(404, 'Not found')
+
+    if status == 'expired':
+        return bottle.template(EXPIRED_TEMPLATE, filename=f'git commit')
+
+    repo_path = row['repo_path']
+    commit_hash = row['commit_hash']
+
+    try:
+        info = get_git_commit_info(repo_path, commit_hash)
+    except Exception as e:
+        bottle.abort(500, f'Failed to read git commit: {e}')
+
+    # Render diffs with Pygments
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pygments.lexers import DiffLexer
+
+    cfg = load_config()
+    pygments_cfg = cfg.get('pygments', {})
+    style = pygments_cfg.get('style', 'monokai')
+    formatter = HtmlFormatter(style=style, cssclass='highlight', nowrap=False)
+    lexer = DiffLexer()
+    pygments_css = formatter.get_style_defs('.highlight')
+
+    files_html = []
+    for f in info['files']:
+        stats = f'+{f["added"]} -{f["deleted"]}'
+        diff_highlighted = highlight(f['diff'], lexer, formatter) if f['diff'] else '<pre>No diff available</pre>'
+        files_html.append(
+            f'<details><summary><span class="file-path">{_html_escape(f["path"])}</span>'
+            f' <span class="file-stats">({stats})</span></summary>'
+            f'<div class="diff-content">{diff_highlighted}</div></details>'
+        )
+
+    repo_display = _display_path(repo_path)
+    short_hash = info['hash'][:12]
+    body_html = f'<p class="commit-body">{_html_escape(info["body"])}</p>' if info['body'] else ''
+
+    bottle.response.content_type = 'text/html; charset=utf-8'
+    return GIT_HTML_TEMPLATE.format(
+        repo_path=_html_escape(repo_display),
+        short_hash=short_hash,
+        full_hash=info['hash'],
+        author_name=_html_escape(info['author_name']),
+        author_email=_html_escape(info['author_email']),
+        date=_html_escape(info['date']),
+        subject=_html_escape(info['subject']),
+        body_html=body_html,
+        files_html='\n'.join(files_html),
+        file_count=len(info['files']),
+        pygments_css=pygments_css,
+    )
+
+
+def _html_escape(text):
+    """Simple HTML escape."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
+GIT_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{repo_path} · {short_hash}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    min-height: 100vh;
+  }}
+  .commit-header {{
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
+    padding: 16px;
+  }}
+  .commit-repo {{
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 8px;
+  }}
+  .commit-subject {{
+    font-size: 16px;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+  }}
+  .commit-body {{
+    font-size: 14px;
+    color: #b0b0b0;
+    white-space: pre-wrap;
+    margin-bottom: 8px;
+  }}
+  .commit-meta {{
+    font-size: 13px;
+    color: #888;
+  }}
+  .commit-meta .hash {{
+    font-family: 'SF Mono', 'Menlo', monospace;
+    color: #6ab0f3;
+  }}
+  .file-list {{
+    padding: 8px 0;
+  }}
+  .file-list details {{
+    border-bottom: 1px solid #333;
+  }}
+  .file-list summary {{
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    background: #252525;
+  }}
+  .file-list summary:hover {{
+    background: #2a2a2a;
+  }}
+  .file-path {{
+    color: #e0e0e0;
+  }}
+  .file-stats {{
+    color: #888;
+    font-size: 12px;
+  }}
+  .diff-content {{
+    overflow-x: auto;
+  }}
+  {pygments_css}
+  .highlight {{
+    background: #1e1e1e;
+    padding: 0;
+  }}
+  .highlight pre {{
+    padding: 8px 16px;
+    margin: 0;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }}
+  .file-summary {{
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #888;
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
+  }}
+  @media (max-width: 768px) {{
+    .commit-header {{ padding: 12px; }}
+    .file-list summary {{ padding: 8px 12px; font-size: 13px; }}
+    .highlight pre {{ font-size: 12px; padding: 6px 12px; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="commit-header">
+    <div class="commit-repo">{repo_path}</div>
+    <div class="commit-subject">{subject}</div>
+    {body_html}
+    <div class="commit-meta">
+      <span class="hash">{short_hash}</span> · {author_name} &lt;{author_email}&gt; · {date}
+    </div>
+  </div>
+  <div class="file-summary">{file_count} files changed</div>
+  <div class="file-list">
+    {files_html}
+  </div>
+</body>
+</html>"""
 
 
 EXPIRED_TEMPLATE = """<!DOCTYPE html>
@@ -536,7 +905,9 @@ def serve(port, host, foreground):
 
 @cli.command()
 @click.argument('path')
-@click.option('--ttl', default=None, type=int, help=f'Time-to-live in seconds (default: config file_ttl or {DEFAULT_TTL})')
+@click.option(
+    '--ttl', default=None, type=int, help=f'Time-to-live in seconds (default: config file_ttl or {DEFAULT_TTL})'
+)
 @click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
 @click.option('--host', default='localhost', show_default=True, help='Host for URL generation')
 @click.option('--head', default=None, type=int, help='Only show first N lines')
@@ -569,6 +940,38 @@ def allow(path, ttl, port, host, head, tail):
         start_daemon(port, DEFAULT_HOST)
 
 
+@cli.command('allow-git')
+@click.argument('repo_path')
+@click.argument('commit_hash')
+@click.option(
+    '--ttl', default=None, type=int, help=f'Time-to-live in seconds (default: config file_ttl or {DEFAULT_TTL})'
+)
+@click.option('--port', default=DEFAULT_PORT, show_default=True, help='Port for URL generation')
+def allow_git(repo_path, commit_hash, ttl, port):
+    """Authorize a git commit for viewing and print its URL."""
+    ensure_state_dir()
+    if ttl is None:
+        cfg = load_config()
+        ttl = cfg.get('file_ttl', DEFAULT_TTL)
+    try:
+        token, is_new = add_git_authorization(repo_path, commit_hash, ttl)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    base_url = load_config().get('base_url')
+    if base_url:
+        url = f'{base_url.rstrip("/")}/git/{token}'
+    else:
+        url = f'http://localhost:{port}/git/{token}'
+    click.echo(url)
+    if not is_new:
+        click.echo('(existing authorization extended)', err=True)
+
+    # Auto-start daemon if not running
+    if not is_daemon_running():
+        start_daemon(port, DEFAULT_HOST)
+
+
 @cli.command()
 @click.argument('token')
 def revoke(token):
@@ -581,20 +984,37 @@ def revoke(token):
 
 @cli.command('list')
 def list_cmd():
-    """List currently authorized files."""
+    """List currently authorized files and git commits."""
     rows = list_authorizations()
-    if not rows:
-        click.echo('No active authorizations.')
-        return
-
     now = time.time()
-    for row in rows:
-        remaining = row['expires_at'] - now
-        if remaining > 0:
-            status = f'{int(remaining)}s remaining'
-        else:
-            status = 'expired'
-        click.echo(f'  {row["token"]}  {row["filepath"]}  [{status}]')
+    has_any = False
+
+    if rows:
+        has_any = True
+        click.echo('Files:')
+        for row in rows:
+            remaining = row['expires_at'] - now
+            status = f'{int(remaining)}s remaining' if remaining > 0 else 'expired'
+            click.echo(f'  {row["token"]}  {row["filepath"]}  [{status}]')
+
+    # Git authorizations
+    db = get_db()
+    git_rows = db.execute(
+        'SELECT token, repo_path, commit_hash, created_at, expires_at FROM git_authorizations ORDER BY created_at DESC'
+    ).fetchall()
+    db.close()
+
+    if git_rows:
+        has_any = True
+        click.echo('Git commits:')
+        for row in git_rows:
+            remaining = row['expires_at'] - now
+            status = f'{int(remaining)}s remaining' if remaining > 0 else 'expired'
+            short_hash = row['commit_hash'][:12]
+            click.echo(f'  {row["token"]}  {_display_path(row["repo_path"])} {short_hash}  [{status}]')
+
+    if not has_any:
+        click.echo('No active authorizations.')
 
 
 @cli.command()
