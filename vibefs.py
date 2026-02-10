@@ -654,6 +654,41 @@ init_renderers()
 app = bottle.Bottle()
 
 
+def _check_expired_auth(password):
+    """Check if user has a valid auth cookie. Returns True if verified."""
+    return bottle.request.get_cookie('vibefs_auth', secret=password) == 'verified'
+
+
+@app.route('/verify')
+def verify_page():
+    next_url = bottle.request.query.get('next', '/')
+    cfg = load_config()
+    password = cfg.get('password')
+    if not password:
+        bottle.abort(403, 'No password configured')
+    if _check_expired_auth(password):
+        bottle.redirect(next_url)
+    return bottle.template(EXPIRED_VERIFY_TEMPLATE, next=next_url, error='')
+
+
+@app.post('/verify')
+def verify_submit():
+    next_url = bottle.request.forms.get('next', '/')
+    if not next_url.startswith('/'):
+        next_url = '/'
+    cfg = load_config()
+    password = cfg.get('password')
+    if not password:
+        bottle.abort(403, 'No password configured')
+
+    submitted = bottle.request.forms.get('password', '')
+    if submitted == password:
+        bottle.response.set_cookie('vibefs_auth', 'verified', secret=password, path='/', max_age=86400)
+        bottle.redirect(next_url)
+    else:
+        return bottle.template(EXPIRED_VERIFY_TEMPLATE, next=next_url, error='Incorrect password')
+
+
 @app.route('/f/<token>/<filename>')
 def serve_file(token, filename):
     row, status = lookup_authorization(token)
@@ -662,7 +697,18 @@ def serve_file(token, filename):
         bottle.abort(404, 'Not found')
 
     if status == 'expired':
-        return bottle.template(EXPIRED_TEMPLATE, filename=row['filename'])
+        cfg = load_config()
+        password = cfg.get('password')
+        if password and _check_expired_auth(password):
+            # Re-activate authorization
+            ttl = cfg.get('file_ttl', DEFAULT_TTL)
+            db = get_db()
+            db.execute('UPDATE authorizations SET expires_at = ? WHERE token = ?', (time.time() + ttl, token))
+            db.commit()
+            db.close()
+        else:
+            verify_url = f'/verify?next={bottle.request.path}' if password else ''
+            return bottle.template(EXPIRED_TEMPLATE, filename=row['filename'], verify_url=verify_url)
 
     filepath = row['filepath']
     if not os.path.isfile(filepath):
@@ -685,7 +731,18 @@ def serve_git(token):
         bottle.abort(404, 'Not found')
 
     if status == 'expired':
-        return bottle.template(EXPIRED_TEMPLATE, filename=f'git commit')
+        cfg = load_config()
+        password = cfg.get('password')
+        if password and _check_expired_auth(password):
+            # Re-activate authorization
+            ttl = cfg.get('file_ttl', DEFAULT_TTL)
+            db = get_db()
+            db.execute('UPDATE git_authorizations SET expires_at = ? WHERE token = ?', (time.time() + ttl, token))
+            db.commit()
+            db.close()
+        else:
+            verify_url = f'/verify?next={bottle.request.path}' if password else ''
+            return bottle.template(EXPIRED_TEMPLATE, filename='git commit', verify_url=verify_url)
 
     repo_path = row['repo_path']
     commit_hash = row['commit_hash']
@@ -861,14 +918,131 @@ EXPIRED_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head><title>File Expired</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; text-align: center; color: #333; }
-  h1 { font-size: 1.4em; }
-  p { color: #666; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .container {
+    max-width: 400px;
+    width: 100%;
+    padding: 32px;
+    text-align: center;
+  }
+  h1 { font-size: 1.3em; color: #e0e0e0; margin-bottom: 8px; }
+  p { color: #888; font-size: 14px; }
+  .unlock {
+    display: inline-block;
+    margin-top: 24px;
+    background: #4a9eff;
+    color: #fff;
+    text-decoration: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .unlock:hover { background: #3a8eef; }
 </style>
 </head>
 <body>
-  <h1>This file is no longer available</h1>
-  <p><strong>{{filename}}</strong> has expired and can no longer be accessed.</p>
+  <div class="container">
+    <h1>This file is no longer available</h1>
+    <p><strong>{{filename}}</strong> has expired and can no longer be accessed.</p>
+    % if verify_url:
+    <a class="unlock" href="{{verify_url}}">Unlock with password</a>
+    % end
+  </div>
+</body>
+</html>
+"""
+
+
+EXPIRED_VERIFY_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head><title>Verification Required</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .container {
+    max-width: 400px;
+    width: 100%;
+    padding: 32px;
+    text-align: center;
+  }
+  h1 {
+    font-size: 1.3em;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+  }
+  .hint {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  input[type="password"] {
+    background: #2d2d2d;
+    border: 1px solid #404040;
+    color: #e0e0e0;
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+    width: 100%;
+  }
+  input[type="password"]:focus {
+    border-color: #6ab0f3;
+  }
+  button {
+    background: #4a9eff;
+    color: #fff;
+    border: none;
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button:hover {
+    background: #3a8eef;
+  }
+  .error {
+    color: #f44;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>This content has expired</h1>
+    <p class="hint">Enter password to unlock access</p>
+    <form method="POST" action="/verify">
+      <input type="hidden" name="next" value="{{next}}">
+      <input type="password" name="password" placeholder="Password" autofocus>
+      <button type="submit">Unlock</button>
+      % if error:
+      <p class="error">{{error}}</p>
+      % end
+    </form>
+  </div>
 </body>
 </html>
 """
@@ -897,7 +1071,9 @@ def serve(port, host, foreground):
     atexit.register(remove_pid)
 
     if not foreground:
-        start_cleanup_timer()
+        cfg = load_config()
+        if cfg.get('auto_stop', False):
+            start_cleanup_timer()
 
     click.echo(f'vibefs serving on http://{host}:{port} (pid {os.getpid()})')
     app.run(host=host, port=port, quiet=True)
@@ -1042,7 +1218,7 @@ def config():
     pass
 
 
-VALID_CONFIG_KEYS = ['base_url', 'file_ttl', 'pygments.style', 'pygments.linenos']
+VALID_CONFIG_KEYS = ['base_url', 'file_ttl', 'auto_stop', 'password', 'pygments.style', 'pygments.linenos']
 
 
 def _get_nested(cfg, key):
@@ -1069,6 +1245,8 @@ def _set_nested(cfg, key, value):
     # Handle type conversions
     if key == 'pygments.linenos':
         value = value.lower() in ('true', '1', 'yes', 'table', 'inline')
+    elif key == 'auto_stop':
+        value = value.lower() in ('true', '1', 'yes')
     elif key == 'file_ttl':
         value = int(value)
     target[parts[-1]] = value
